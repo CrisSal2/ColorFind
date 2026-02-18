@@ -1,0 +1,77 @@
+
+
+@keyframes colorfind-flash-anim {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    100% {
+        transform: scale(1.8);
+        opacity: 0;
+    }
+}
+
+#colorfind-tooltip {
+    position: fixed;
+    z-index: 2147483646;
+    pointer-events: none;
+    display: flex;
+    align-items: stretch;
+    background: #1a1a2e;
+    border: 2px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
+    overflow: hidden;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    max-width: 260px;
+}
+
+#colorfind-swatch {
+    width: 60px;
+    min-height: 90px;
+    flex-shrink: 0;
+    border-right: 2px solid rgba(255, 255, 255, 0.08);
+}
+
+#colorfind-info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 10px 14px;
+    gap: 4px;
+}
+
+#colorfind-name {
+    display: inline-block;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    text-align: center;
+    margin-bottom: 2px;
+}
+
+#colorfind-hex,
+#colorfind-rgb,
+#colorfind-closest {
+    font-size: 11.5px;
+    color: #b0b8c8;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+}
+
+#colorfind-hex {
+    color: #e2e8f0;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+#colorfind-closest {
+    color: #7a8fa6;
+    font-style: italic;
+    margin-top: 2px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 4px;
+}

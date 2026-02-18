@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ColorFind</title>
     <link rel="stylesheet" href="./style.css">
 </head>
+
 <body>
 
     <div class="header">
@@ -15,9 +17,37 @@
 
     <button class="pick-btn" id="pickBtn">Pick a Color</button>
 
-    <div>
+    <div class="result-card" id="resultCard">
+        <div class="swatch-row" id="swatchRow">
+            <div class="color-name-badge" id="colorName">—</div>
+        </div>
+        <div class="details">
+            <div class="detail-row">
+                <span class="detail-label">HEX</span>
+                <span class="detail-value" id="hexVal" data-copy="">—</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">RGB</span>
+                <span class="detail-value" id="rgbVal" data-copy="">—</span>
+            </div>
+            <div class="closest-row">
+                <div class="closest-swatch" id="closestSwatch"></div>
+                <div class="closest-text">Closest named color:<br><strong id="closestName">—</strong> <span
+                        id="closestHex" style="color:#5a6a7e">—</span></div>
+            </div>
+        </div>
     </div>
 
-<script src="./popup.js"></script>
+    <div class="history-section" id="historySection" style="display:none;">
+        <div class="history-label">Recent colors</div>
+        <div class="history-swatches" id="historySwatches"></div>
+    </div>
+
+    <div class="hint">Click a value to copy it to clipboard</div>
+
+    <div class="toast" id="toast">Copied!</div>
+
+    <script src="./popup.js"></script>
 </body>
+
 </html>

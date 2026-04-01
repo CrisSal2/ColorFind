@@ -1,36 +1,30 @@
 {
-  "manifest_version": 3,
-  "name": "ColorFind",
+  "name": "ColorFind – Color Picker",
+  "description": "Click anywhere on the page to instantly identify the color under your cursor. Shows hex, RGB, and a human-friendly color name — great for designers and colorblind users.",
   "version": "1.0",
-  "description": "A Chrome extension to find colors on a webpage.",
+  "manifest_version": 3,
   "permissions": [
     "activeTab",
-    "scripting"
+    "storage"
   ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
     }
   },
   "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
   },
   "content_scripts": [
     {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "css": [
-        "content.css"
-      ],
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
       "run_at": "document_idle"
     }
   ],

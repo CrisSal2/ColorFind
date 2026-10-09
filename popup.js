@@ -17,15 +17,10 @@ document.addEventListener('DOMContentLoaded', function() {
   let picking = false;
 
   // ──────────────────────────────────────────
-  // History (stored in chrome.storage.local)
+  // History (owned by background.js; stored in chrome.storage.local)
   // ──────────────────────────────────────────
-  const MAX_HISTORY = 16;
-
   function loadHistory(cb) {
     chrome.storage.local.get({ colorHistory: [] }, (res) => cb(res.colorHistory));
-  }
-  function saveHistory(history) {
-    chrome.storage.local.set({ colorHistory: history });
   }
 
   function renderHistory(history) {
@@ -36,11 +31,24 @@ document.addEventListener('DOMContentLoaded', function() {
       const chip = document.createElement("div");
       chip.className = "history-chip";
       chip.style.background = item.hex;
-      chip.innerHTML = `<div class="chip-tooltip">${item.hex}<br>${item.closest.name}</div>`;
+
+      const tooltipEl = document.createElement("div");
+      tooltipEl.className = "chip-tooltip";
+      tooltipEl.textContent = `${item.hex} · ${item.closest.name}`;
+      chip.appendChild(tooltipEl);
+
       chip.addEventListener("click", () => displayResult(item));
       historySwatches.appendChild(chip);
     });
   }
+
+  // React to history changes regardless of which context (this popup,
+  // or the background worker after a pick made elsewhere) wrote them.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.colorHistory) {
+      renderHistory(changes.colorHistory.newValue || []);
+    }
+  });
 
   // ──────────────────────────────────────────
   // Display a picked color result
@@ -78,9 +86,11 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   // ──────────────────────────────────────────
-  // Copy to clipboard
+  // Toast (copy confirmation + error messages)
   // ──────────────────────────────────────────
-  function showToast() {
+  function showToast(message, isError) {
+    toast.textContent = message || "Copied!";
+    toast.style.background = isError ? "#ef4444" : "#22c55e";
     toast.classList.add("show");
     setTimeout(() => toast.classList.remove("show"), 1200);
   }
@@ -100,30 +110,25 @@ document.addEventListener('DOMContentLoaded', function() {
   // ──────────────────────────────────────────
   // Pick button
   // ──────────────────────────────────────────
+  function setPickingUI(isPicking) {
+    picking = isPicking;
+    pickBtn.classList.toggle("active", isPicking);
+    pickBtn.textContent = isPicking ? "✕ Cancel" : "⬛ Pick a Color";
+  }
+
   pickBtn.addEventListener("click", () => {
     if (picking) {
-      picking = false;
-      pickBtn.classList.remove("active");
-      pickBtn.textContent = "⬛ Pick a Color";
-      // Tell content script to stop picking
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]) {
-          chrome.tabs.sendMessage(tabs[0].id, { type: "STOP_PICK" }, () => {
-            // Ignore errors if content script isn't active
-            if (chrome.runtime.lastError) {
-              // Silently ignore - user probably already stopped picking
-            }
-          });
-        }
-      });
+      setPickingUI(false);
+      chrome.runtime.sendMessage({ type: "DEACTIVATE_PICKER" });
       return;
     }
-    picking = true;
-    pickBtn.classList.add("active");
-    pickBtn.textContent = "✕ Cancel";
-
-    // Ask background to tell content script to start
-    chrome.runtime.sendMessage({ type: "ACTIVATE_PICKER" });
+    setPickingUI(true);
+    chrome.runtime.sendMessage({ type: "ACTIVATE_PICKER" }, (response) => {
+      if (!response || !response.ok) {
+        setPickingUI(false);
+        showToast(response && response.error ? response.error : "Can't pick colors on this page.", true);
+      }
+    });
   });
 
   // ──────────────────────────────────────────
@@ -131,38 +136,19 @@ document.addEventListener('DOMContentLoaded', function() {
   // ──────────────────────────────────────────
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "COLOR_PICKED") {
-      const data = msg.payload;
-      displayResult(data);
-
-      // Stop picking mode
-      picking = false;
-      pickBtn.classList.remove("active");
-      pickBtn.textContent = "⬛ Pick a Color";
-
-      // Update history
-      loadHistory((history) => {
-        // Remove duplicates
-        history = history.filter(h => h.hex !== data.hex);
-        history.unshift(data);
-        if (history.length > MAX_HISTORY) history = history.slice(0, MAX_HISTORY);
-        saveHistory(history);
-        renderHistory(history);
-      });
+      displayResult(msg.payload);
+      setPickingUI(false);
+      // History itself is persisted by background.js; the storage.onChanged
+      // listener above re-renders it once that write lands.
     }
   });
 
   // ──────────────────────────────────────────
-  // On popup open: load last color + history
+  // On popup open: load history and show the most recent color
   // ──────────────────────────────────────────
-  chrome.runtime.sendMessage({ type: "GET_LAST_COLOR" }, (lastColor) => {
-    loadHistory((history) => {
-      renderHistory(history);
-      if (lastColor) {
-        displayResult(lastColor);
-      } else if (history.length > 0) {
-        displayResult(history[0]);
-      }
-    });
+  loadHistory((history) => {
+    renderHistory(history);
+    if (history.length > 0) displayResult(history[0]);
   });
 
 });

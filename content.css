@@ -17,14 +17,14 @@
   box-shadow: 0 8px 32px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3);
   overflow: hidden;
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  max-width: 260px;
 }
 
-#colorfind-swatch {
-  width: 60px;
-  min-height: 90px;
+#colorfind-magnifier {
+  display: block;
   flex-shrink: 0;
+  max-width: none;
   border-right: 2px solid rgba(255,255,255,0.08);
+  image-rendering: pixelated;
 }
 
 #colorfind-info {

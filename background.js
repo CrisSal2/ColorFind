@@ -2,37 +2,55 @@
 
 const MAX_HISTORY = 16;
 
+// Saves are chained so rapid picks can't read the same old history and
+// overwrite each other's writes.
+let saveQueue = Promise.resolve();
+
 function saveColorToHistory(payload) {
-  chrome.storage.local.get({ colorHistory: [] }, ({ colorHistory }) => {
-    let history = colorHistory.filter((h) => h.hex !== payload.hex);
-    history.unshift(payload);
-    if (history.length > MAX_HISTORY) history = history.slice(0, MAX_HISTORY);
-    chrome.storage.local.set({ colorHistory: history });
-  });
+  saveQueue = saveQueue
+    .then(async () => {
+      const { colorHistory } = await chrome.storage.local.get({ colorHistory: [] });
+      const history = colorHistory.filter((h) => h.hex !== payload.hex);
+      history.unshift(payload);
+      await chrome.storage.local.set({ colorHistory: history.slice(0, MAX_HISTORY) });
+    })
+    .catch(() => {});
+}
+
+function startPick(tabId, screenshot) {
+  return chrome.tabs.sendMessage(tabId, { type: "START_PICK", screenshot });
+}
+
+async function activatePicker() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) return { ok: false, error: "No active tab found." };
+
+  let dataUrl;
+  try {
+    dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  } catch (e) {
+    return { ok: false, error: "Couldn't capture this page." };
+  }
+
+  try {
+    return await startPick(tab.id, dataUrl);
+  } catch (e) {
+    // No content script listening, e.g. the tab was open before the extension
+    // was installed or reloaded. Inject it and try once more.
+  }
+
+  try {
+    await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["content.css"] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+    return await startPick(tab.id, dataUrl);
+  } catch (e) {
+    return { ok: false, error: "ColorFind can't run on this page." };
+  }
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "ACTIVATE_PICKER") {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tab = tabs[0];
-      if (!tab) {
-        sendResponse({ ok: false, error: "No active tab found." });
-        return;
-      }
-      chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }, (dataUrl) => {
-        if (chrome.runtime.lastError || !dataUrl) {
-          sendResponse({ ok: false, error: "Couldn't capture this page." });
-          return;
-        }
-        chrome.tabs.sendMessage(tab.id, { type: "START_PICK", screenshot: dataUrl }, (_response) => {
-          if (chrome.runtime.lastError) {
-            sendResponse({ ok: false, error: "ColorFind can't run on this page." });
-          } else {
-            sendResponse({ ok: true });
-          }
-        });
-      });
-    });
+    activatePicker().then(sendResponse);
     return true; // sendResponse is called asynchronously
   }
 

@@ -127,7 +127,11 @@ document.addEventListener('DOMContentLoaded', function() {
       if (!response || !response.ok) {
         setPickingUI(false);
         showToast(response && response.error ? response.error : "Can't pick colors on this page.", true);
+        return;
       }
+      // Get the popup out of the way so the whole page can be picked from.
+      // Picks are saved to history and shown the next time the popup opens.
+      window.close();
     });
   });
 

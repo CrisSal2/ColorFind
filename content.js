@@ -5,7 +5,8 @@
   let canvas, ctx;
   let scaleX = 1, scaleY = 1;
   let tooltip, indicator, overlay;
-  let prevHtmlOverflow = "", prevBodyOverflow = "";
+  let magCanvas, magCtx, nameEl, hexEl, rgbEl, closestEl;
+  let teardown = null;
 
   // ──────────────────────────────────────────
   // Standard CSS extended color keywords (148 colors, no duplicates)
@@ -96,14 +97,21 @@
     return luminance(r, g, b) > 0.18 ? "#111111" : "#EEEEEE";
   }
 
+  function clamp(v, min, max) {
+    return Math.min(max, Math.max(min, v));
+  }
+
   // ──────────────────────────────────────────
-  // Tooltip element (live preview bubble)
+  // Tooltip element (magnifier + live color info)
   // ──────────────────────────────────────────
+  const MAG_GRID = 15;   // screenshot pixels shown across (odd, so there's a center pixel)
+  const MAG_SIZE = 120;  // on-screen size in CSS px
+
   function createTooltip() {
     tooltip = document.createElement("div");
     tooltip.id = "colorfind-tooltip";
     tooltip.innerHTML = `
-      <div id="colorfind-swatch"></div>
+      <canvas id="colorfind-magnifier"></canvas>
       <div id="colorfind-info">
         <span id="colorfind-name">—</span>
         <span id="colorfind-hex">—</span>
@@ -111,53 +119,86 @@
         <span id="colorfind-closest">—</span>
       </div>
     `;
+    tooltip.style.visibility = "hidden"; // shown on first mousemove
     document.body.appendChild(tooltip);
+
+    // Back the magnifier at device resolution so the pixel grid stays crisp
+    const dpr = window.devicePixelRatio || 1;
+    magCanvas = tooltip.querySelector("#colorfind-magnifier");
+    magCanvas.width = magCanvas.height = Math.round(MAG_SIZE * dpr);
+    magCanvas.style.width = magCanvas.style.height = MAG_SIZE + "px";
+    magCtx = magCanvas.getContext("2d");
+
+    nameEl    = tooltip.querySelector("#colorfind-name");
+    hexEl     = tooltip.querySelector("#colorfind-hex");
+    rgbEl     = tooltip.querySelector("#colorfind-rgb");
+    closestEl = tooltip.querySelector("#colorfind-closest");
   }
 
-  function updateTooltip(x, y, r, g, b) {
-    const hex   = rgbToHex(r, g, b);
-    const rgb   = `rgb(${r}, ${g}, ${b})`;
-    const closest = findClosestNamedColor(r, g, b);
-    const txt   = textColorFor(r, g, b);
+  function drawMagnifier(px, py) {
+    const W = magCanvas.width;
+    const cell = W / MAG_GRID;
+    const half = (MAG_GRID - 1) / 2;
 
-    // Smart positioning - avoid screen edges
-    const tooltipWidth = 260;  // max-width from CSS
-    const tooltipHeight = 90;
-    const padding = 20;
+    magCtx.imageSmoothingEnabled = false;
+    magCtx.fillStyle = "#0f0f1a"; // shows past the screenshot edges
+    magCtx.fillRect(0, 0, W, W);
+    magCtx.drawImage(canvas, px - half, py - half, MAG_GRID, MAG_GRID, 0, 0, W, W);
 
-    let left = x + padding;
-    let top = y - tooltipHeight;
-
-    // If tooltip would go off right edge, flip to left side of cursor
-    if (left + tooltipWidth > window.innerWidth) {
-      left = x - tooltipWidth - padding;
+    // Pixel grid
+    magCtx.lineWidth = 1;
+    magCtx.strokeStyle = "rgba(0,0,0,0.18)";
+    magCtx.beginPath();
+    for (let i = 1; i < MAG_GRID; i++) {
+      const p = Math.round(i * cell) + 0.5;
+      magCtx.moveTo(p, 0); magCtx.lineTo(p, W);
+      magCtx.moveTo(0, p); magCtx.lineTo(W, p);
     }
+    magCtx.stroke();
 
-    // If tooltip would go off bottom edge, show above cursor
-    if (top + tooltipHeight > window.innerHeight) {
-      top = y - tooltipHeight - padding;
-    }
+    // Outline the sampled pixel: white ring inside a black ring, both outside the
+    // pixel itself so its color stays fully visible on any background
+    const c = half * cell;
+    const lw = Math.max(1, Math.round(window.devicePixelRatio || 1));
+    magCtx.lineWidth = lw;
+    magCtx.strokeStyle = "#fff";
+    magCtx.strokeRect(c - lw / 2, c - lw / 2, cell + lw, cell + lw);
+    magCtx.strokeStyle = "#000";
+    magCtx.strokeRect(c - 1.5 * lw, c - 1.5 * lw, cell + 3 * lw, cell + 3 * lw);
+  }
 
-    // If tooltip would go off top edge, show below cursor
-    if (top < 0) {
-      top = y + padding;
-    }
+  function positionTooltip(cursorX, cursorY) {
+    const w = tooltip.offsetWidth, h = tooltip.offsetHeight;
+    const gap = 24, margin = 8;
 
-    // If tooltip would go off left edge (after flipping), keep it on screen
-    if (left < 0) {
-      left = padding;
-    }
+    // Right of the cursor, flipping to the left near the right edge
+    let left = cursorX + gap;
+    if (left + w > window.innerWidth - margin) left = cursorX - gap - w;
+    left = Math.max(margin, left);
+
+    // Vertically centered on the cursor, kept on screen
+    const top = clamp(cursorY - h / 2, margin, window.innerHeight - h - margin);
 
     tooltip.style.left = left + "px";
     tooltip.style.top  = top + "px";
+  }
 
-    document.getElementById("colorfind-swatch").style.background = hex;
-    document.getElementById("colorfind-name").textContent   = closest.name;
-    document.getElementById("colorfind-name").style.color   = txt;
-    document.getElementById("colorfind-name").style.background = hex;
-    document.getElementById("colorfind-hex").textContent    = hex;
-    document.getElementById("colorfind-rgb").textContent    = rgb;
-    document.getElementById("colorfind-closest").textContent = `≈ ${closest.name} (${rgbToHex(closest.r, closest.g, closest.b)})`;
+  // px/py: screenshot pixel being sampled; cursorX/cursorY: mouse position in CSS px
+  function updateTooltip(px, py, cursorX, cursorY) {
+    const [r, g, b] = getPixel(px, py);
+    const hex     = rgbToHex(r, g, b);
+    const closest = findClosestNamedColor(r, g, b);
+
+    drawMagnifier(px, py);
+    nameEl.textContent      = closest.name;
+    nameEl.style.color      = textColorFor(r, g, b);
+    nameEl.style.background = hex;
+    hexEl.textContent       = hex;
+    rgbEl.textContent       = `rgb(${r}, ${g}, ${b})`;
+    closestEl.textContent   = `≈ ${closest.name} (${rgbToHex(closest.r, closest.g, closest.b)})`;
+
+    tooltip.style.visibility = "visible";
+    positionTooltip(cursorX, cursorY);
   }
 
   // ──────────────────────────────────────────
@@ -172,7 +213,7 @@
         canvas = document.createElement("canvas");
         canvas.width  = img.naturalWidth;
         canvas.height = img.naturalHeight;
-        ctx = canvas.getContext("2d");
+        ctx = canvas.getContext("2d", { willReadFrequently: true });
         ctx.drawImage(img, 0, 0);
         // The screenshot is captured at device resolution; map CSS pixels to it.
         scaleX = img.naturalWidth  / window.innerWidth;
@@ -184,10 +225,16 @@
     });
   }
 
-  function getPixel(clientX, clientY) {
-    if (!ctx) return [0, 0, 0];
-    const x = Math.min(canvas.width  - 1, Math.max(0, Math.round(clientX * scaleX)));
-    const y = Math.min(canvas.height - 1, Math.max(0, Math.round(clientY * scaleY)));
+  // Map a CSS-pixel cursor position to the screenshot pixel that contains it,
+  // shifted by any keyboard nudge and clamped to the image.
+  function toScreenshotPixel(clientX, clientY, nudgeX, nudgeY) {
+    return [
+      clamp(Math.floor(clientX * scaleX) + nudgeX, 0, canvas.width  - 1),
+      clamp(Math.floor(clientY * scaleY) + nudgeY, 0, canvas.height - 1)
+    ];
+  }
+
+  function getPixel(x, y) {
     const data = ctx.getImageData(x, y, 1, 1).data;
     return [data[0], data[1], data[2]];
   }
@@ -220,7 +267,7 @@
         <div style="width:8px;height:8px;border-radius:50%;background:#4ade80;animation:colorfind-pulse 1.5s infinite;"></div>
         <span style="font-weight:700;letter-spacing:0.5px;">ColorFind Active</span>
       </div>
-      <div style="font-size:11px;opacity:0.7;margin-top:2px;">Left-click to pick • Right-click to exit</div>
+      <div style="font-size:11px;opacity:0.7;margin-top:2px;">Click or Enter to pick • Arrows nudge 1px • Esc to exit</div>
     `;
     indicator.style.cssText = `
       position: fixed;
@@ -261,51 +308,55 @@
   }
 
   // ──────────────────────────────────────────
-  // Lock page scroll while picking, so the frozen screenshot
-  // stays aligned with the cursor position
-  // ──────────────────────────────────────────
-  function lockScroll() {
-    prevHtmlOverflow = document.documentElement.style.overflow;
-    prevBodyOverflow = document.body.style.overflow;
-    document.documentElement.style.overflow = "hidden";
-    document.body.style.overflow = "hidden";
-  }
-
-  function unlockScroll() {
-    document.documentElement.style.overflow = prevHtmlOverflow;
-    document.body.style.overflow = prevBodyOverflow;
-  }
-
-  // ──────────────────────────────────────────
   // Activate / Deactivate the picker
   // ──────────────────────────────────────────
+  const NUDGE_KEYS = new Map([
+    ["ArrowLeft", [-1, 0]], ["ArrowRight", [1, 0]],
+    ["ArrowUp",   [0, -1]], ["ArrowDown",  [0, 1]]
+  ]);
+  const SCROLL_KEYS = new Set([" ", "PageUp", "PageDown", "Home", "End"]);
+
+  // Resolves once the picker is live; rejects if the screenshot can't be decoded.
   async function activate(screenshotDataUrl) {
     if (active) return;
     active = true;
-    createOverlay();
-    createTooltip();
-    createIndicator();
-    lockScroll();
 
     try {
       await loadScreenshot(screenshotDataUrl);
     } catch (e) {
-      // If the screenshot fails to decode, sampling will just report (0,0,0).
+      active = false;
+      throw e;
+    }
+    if (!active) {
+      // STOP_PICK arrived while the screenshot was loading
+      canvas = ctx = null;
+      return;
     }
 
-    function onMouseMove(e) {
-      const [r, g, b] = getPixel(e.clientX, e.clientY);
-      updateTooltip(e.clientX, e.clientY, r, g, b);
+    createOverlay();
+    createTooltip();
+    createIndicator();
+
+    let cursorX = null, cursorY = null;  // last mouse position, CSS px
+    let nudgeX = 0, nudgeY = 0;          // keyboard offset, screenshot px
+    const lockedScrollX = window.scrollX, lockedScrollY = window.scrollY;
+
+    function currentPixel() {
+      const [x, y] = toScreenshotPixel(cursorX, cursorY, nudgeX, nudgeY);
+      // Keep the nudge in step with clamping so it can't drift past the image edge
+      nudgeX = x - Math.floor(cursorX * scaleX);
+      nudgeY = y - Math.floor(cursorY * scaleY);
+      return [x, y];
     }
 
-    function onClick(e) {
-      // Only handle left clicks (button 0)
-      if (e.button !== 0) return;
+    function refresh() {
+      const [x, y] = currentPixel();
+      updateTooltip(x, y, cursorX, cursorY);
+    }
 
-      e.preventDefault();
-      e.stopPropagation();
-
-      const [r, g, b] = getPixel(e.clientX, e.clientY);
+    function pick() {
+      const [x, y] = currentPixel();
+      const [r, g, b] = getPixel(x, y);
       const hex     = rgbToHex(r, g, b);
       const rgb     = `rgb(${r}, ${g}, ${b})`;
       const closest = findClosestNamedColor(r, g, b);
@@ -316,11 +367,25 @@
         payload: { hex, rgb, r, g, b, closest }
       });
 
-      // Show a flash confirmation on the page
-      showFlash(e.clientX, e.clientY, hex);
+      // Flash at the sampled pixel (which may be nudged away from the cursor).
+      // Stay active afterwards so the user can pick multiple colors.
+      showFlash((x + 0.5) / scaleX, (y + 0.5) / scaleY, hex);
+    }
 
-      // Don't deactivate - let user pick multiple colors
-      // They can right-click to exit
+    function onMouseMove(e) {
+      cursorX = e.clientX;
+      cursorY = e.clientY;
+      nudgeX = nudgeY = 0;
+      refresh();
+    }
+
+    function onMouseDown(e) {
+      // Swallow every button: no page clicks, focus changes or middle-click autoscroll
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.button !== 0) return;
+      if (cursorX === null) { cursorX = e.clientX; cursorY = e.clientY; }
+      pick();
     }
 
     function onRightClick(e) {
@@ -329,38 +394,58 @@
       deactivate();
     }
 
-    function onWheel(e) {
-      // Keep the frozen screenshot aligned with the cursor
+    function onKeyDown(e) {
+      const nudge = NUDGE_KEYS.get(e.key);
+      if (!nudge && !SCROLL_KEYS.has(e.key) && e.key !== "Escape" && e.key !== "Enter") return;
       e.preventDefault();
+      e.stopPropagation();
+
+      if (e.key === "Escape") { deactivate(); return; }
+      if (cursorX === null) return; // nothing hovered yet
+      if (e.key === "Enter") { pick(); return; }
+      if (nudge) {
+        const step = e.shiftKey ? 10 : 1;
+        nudgeX += nudge[0] * step;
+        nudgeY += nudge[1] * step;
+        refresh();
+      }
     }
 
-    // Attach all listeners to the overlay (blocks interaction with page)
-    overlay.addEventListener("mousemove", onMouseMove);
-    overlay.addEventListener("mousedown", onClick);  // Use mousedown for better response
-    overlay.addEventListener("contextmenu", onRightClick);
-    overlay.addEventListener("wheel", onWheel, { passive: false });
+    // Keep the frozen screenshot aligned with the page: block scroll input
+    // rather than hiding overflow, which would remove the scrollbar and shift layout
+    function preventDefault(e) { e.preventDefault(); }
+    function stopPropagation(e) { e.stopPropagation(); }
+    function onScroll() { window.scrollTo(lockedScrollX, lockedScrollY); }
 
-    // Store refs so we can remove them
-    window.__colorfind_handlers = { onMouseMove, onClick, onRightClick, onWheel };
+    overlay.addEventListener("mousemove", onMouseMove);
+    overlay.addEventListener("mousedown", onMouseDown);
+    overlay.addEventListener("contextmenu", onRightClick);
+    overlay.addEventListener("wheel", preventDefault, { passive: false });
+    overlay.addEventListener("touchmove", preventDefault, { passive: false });
+    // Don't let the rest of the click sequence bubble to page handlers
+    for (const type of ["pointerdown", "pointerup", "mouseup", "click", "dblclick", "auxclick"]) {
+      overlay.addEventListener(type, stopPropagation);
+    }
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("scroll", onScroll);
+
+    // Overlay listeners go away with the overlay; only window listeners need removing
+    teardown = () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("scroll", onScroll);
+    };
   }
 
   function deactivate() {
     if (!active) return;
     active = false;
-    unlockScroll();
-    if (tooltip) { tooltip.remove(); tooltip = null; }
-    if (indicator) { indicator.remove(); indicator = null; }
-    if (overlay && window.__colorfind_handlers) {
-      overlay.removeEventListener("mousemove", window.__colorfind_handlers.onMouseMove);
-      overlay.removeEventListener("mousedown", window.__colorfind_handlers.onClick);
-      overlay.removeEventListener("contextmenu", window.__colorfind_handlers.onRightClick);
-      overlay.removeEventListener("wheel", window.__colorfind_handlers.onWheel);
-      overlay.remove();
-      overlay = null;
-      delete window.__colorfind_handlers;
+    if (teardown) { teardown(); teardown = null; }
+    for (const el of [overlay, tooltip, indicator]) {
+      if (el) el.remove();
     }
-    canvas = null;
-    ctx    = null;
+    overlay = tooltip = indicator = null;
+    magCanvas = magCtx = nameEl = hexEl = rgbEl = closestEl = null;
+    canvas = ctx = null;
   }
 
   // ──────────────────────────────────────────
@@ -384,9 +469,18 @@
   // ──────────────────────────────────────────
   // Listen for messages from popup / background
   // ──────────────────────────────────────────
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "START_PICK") activate(msg.screenshot);
-    if (msg.type === "STOP_PICK") deactivate();
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === "START_PICK") {
+      activate(msg.screenshot).then(
+        () => sendResponse({ ok: true }),
+        () => sendResponse({ ok: false, error: "Couldn't read the page screenshot." })
+      );
+      return true; // respond once the screenshot has loaded
+    }
+    if (msg.type === "STOP_PICK") {
+      deactivate();
+      sendResponse({ ok: true });
+    }
   });
 
 })();
